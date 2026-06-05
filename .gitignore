@@ -1,0 +1,9 @@
+ssh_config
+MySSH/python/
+
+# macOS
+.DS_Store
+
+# Xcode user data
+xcuserdata/
+*.xcuserstate

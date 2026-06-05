@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - name: Import certificate
+        run: |
+          echo "${{ secrets.CERT_BASE64 }}" | base64 --decode > cert.p12
+          security create-keychain -p "" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "" build.keychain
+          security import cert.p12 -k build.keychain \
+            -P "${{ secrets.CERT_PASSWORD }}" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
+
+      - name: Archive
+        run: |
+          xcodebuild archive \
+            -project MySSH.xcodeproj \
+            -scheme MySSH \
+            -archivePath build/MySSH.xcarchive \
+            CODE_SIGN_IDENTITY="Developer ID Application" \
+            CODE_SIGN_STYLE=Manual
+
+      - name: Export
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath build/MySSH.xcarchive \
+            -exportPath build/export \
+            -exportOptionsPlist ExportOptions.plist
+
+      - name: Notarize
+        run: |
+          APP_PATH=$(find build/export -name "*.app" -maxdepth 1 | head -1)
+          ditto -c -k --keepParent "$APP_PATH" build/export/app.zip
+          xcrun notarytool submit build/export/app.zip \
+            --apple-id "${{ secrets.APPLE_ID }}" \
+            --password "${{ secrets.APPLE_APP_PASSWORD }}" \
+            --team-id "${{ secrets.APPLE_TEAM_ID }}" \
+            --wait
+          xcrun stapler staple "$APP_PATH"
+
+      - name: Create DMG
+        run: |
+          APP_PATH=$(find build/export -name "*.app" -maxdepth 1 | head -1)
+          mkdir -p build/dmg_staging
+          cp -R "$APP_PATH" build/dmg_staging/
+          ln -s /Applications build/dmg_staging/Applications
+          hdiutil create -volname "MySSH" \
+            -srcfolder build/dmg_staging \
+            -ov -format UDZO build/MySSH.dmg
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/MySSH.dmg
